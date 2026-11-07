@@ -104,19 +104,27 @@ export const contextGone = () => new LivLivError('context-lost', 'LivLiv: this c
 
 /** a response's bytes, saying how far they have come
  *  @internal */
-export async function readBody(r: Response, job: LoadJob, share = (p: number) => p): Promise<Blob> {
+export async function readBody(r: Response, job: LoadJob, share = (p: number) => p, maxBytes = 64 * 2 ** 20): Promise<Blob> {
   const size = r.headers.get('content-encoding') ? 0 : Number(r.headers.get('content-length')) || 0
-  if (!r.body) return r.blob()
+  if (size > maxBytes) { await r.body?.cancel(); throw new LivLivError('too-large', 'LivLiv: download exceeds its byte limit') }
+  if (!r.body) { const b = await r.blob(); if (b.size > maxBytes) throw new LivLivError('too-large', 'LivLiv: download exceeds its byte limit'); return b }
   const reader = r.body.getReader(), parts: Uint8Array<ArrayBuffer>[] = []
   let got = 0
+  const cancel = () => { void reader.cancel(job.signal.reason).catch(() => {}) }
+  job.signal.addEventListener('abort', cancel, { once: true })
+  try {
   for (;;) {
+    if (job.signal.aborted) throw job.signal.reason
     const { done, value } = await reader.read()
+    if (job.signal.aborted) throw job.signal.reason
     if (done) break
-    parts.push(value)
     got += value.byteLength
+    if (got > maxBytes) { await reader.cancel(); throw new LivLivError('too-large', 'LivLiv: download exceeds its byte limit') }
+    parts.push(value)
     if (size) job.progress(share(Math.min(1, got / size)))
   }
   return new Blob(parts)
+  } finally { job.signal.removeEventListener('abort', cancel); reader.releaseLock() }
 }
 
 const DEFAULTS = defaultParams()

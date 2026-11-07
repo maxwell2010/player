@@ -88,6 +88,15 @@ test('refusals', async () => {
   await assert.rejects(unzip(zip([{ name: 'model.json', data: bytes('{}'), method: 8, usize: 10 }])), /damaged/)
 })
 
+test('rejects oversized and out-of-bounds central directories before allocation', async () => {
+  const original = new Uint8Array(await zip([{ name: 'model.json', data: bytes('{}') }]).arrayBuffer())
+  for (const [offset, value, expected] of [[12, 5 * 2 ** 20, /central directory exceeds/], [16, original.length, /central directory extends/]] as const) {
+    const data = original.slice()
+    new DataView(data.buffer).setUint32(data.length - 22 + offset, value, true)
+    await assert.rejects(unzip(new Blob([data])), expected)
+  }
+})
+
 test('Finder\'s compress (ditto): the folder inside, __MACOSX beside it', { skip: !existsSync('/usr/bin/ditto') }, async () => {
   const d = mkdtempSync(join(tmpdir(), 'livliv-zip-'))
   mkdirSync(join(d, 'Sena', 'textures'), { recursive: true })
