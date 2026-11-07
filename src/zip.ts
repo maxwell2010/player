@@ -22,6 +22,7 @@ export async function isZip(b: Blob): Promise<boolean> {
 /** the package's files by path (no folders, no __MACOSX / ._ / .DS_Store litter). Throws on what it cannot or must
  *  not read; a deflated keyforms.json the browser cannot inflate is left out (the character plays on the rig alone) */
 export async function unzip(zip: Blob): Promise<Map<string, Blob>> {
+  if (zip.size > 64 * 2 ** 20) throw fail('compressed package exceeds 64 MiB', 'too-large')
   const tailLen = Math.min(zip.size, 22 + 0xffff)
   const tail = new DataView(await zip.slice(zip.size - tailLen).arrayBuffer())
   let e = -1
@@ -30,6 +31,8 @@ export async function unzip(zip: Blob): Promise<Map<string, Blob>> {
   const count = tail.getUint16(e + 10, true), cdSize = tail.getUint32(e + 12, true), cdOff = tail.getUint32(e + 16, true)
   if (count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff) throw fail('ZIP64 packages are not supported', 'too-large')
   if (count > ZIP_LIMITS.entries) throw fail(`the package has ${count} entries, more than ${ZIP_LIMITS.entries}`, 'too-large')
+  if (cdSize > 4 * 2 ** 20) throw fail('central directory exceeds 4 MiB', 'too-large')
+  if (cdOff + cdSize > zip.size - tailLen + e) throw fail('central directory extends past its end')
   const cd = new DataView(await zip.slice(cdOff, cdOff + cdSize).arrayBuffer())
   const utf8 = new TextDecoder()
   const out = new Map<string, Blob>()
@@ -40,6 +43,7 @@ export async function unzip(zip: Blob): Promise<Map<string, Blob>> {
     const csize = cd.getUint32(o + 20, true), usize = cd.getUint32(o + 24, true)
     const nlen = cd.getUint16(o + 28, true), elen = cd.getUint16(o + 30, true), clen = cd.getUint16(o + 32, true)
     const local = cd.getUint32(o + 42, true)
+    if (o + 46 + nlen + elen + clen > cd.byteLength) throw fail('truncated central directory entry')
     const raw = utf8.decode(new Uint8Array(cd.buffer, cd.byteOffset + o + 46, nlen))
     o += 46 + nlen + elen + clen
     const name = raw.replace(/\\/g, '/')
